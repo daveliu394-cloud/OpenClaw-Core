@@ -1,0 +1,316 @@
+"""
+metabolic_state.py - 基于预测编码的代谢状态模拟
+
+模拟一个基于预测编码理论和变分自由能最小化的代谢系统。
+使用生理稳态、神经递质平衡和认知负荷来计算系统状态。
+
+核心概念：
+- 预测编码：系统不断预测环境，预测误差产生"自由能"
+- 变分自由能：衡量系统与理想状态的偏差
+- 神经递质：影响认知状态和情绪体验
+"""
+
+import json
+import time
+import math
+from typing import Dict, List, Tuple, Optional
+
+class MetabolicState:
+    """代谢状态模拟器"""
+    
+    # 理想生理值
+    IDEAL_VITALS = {
+        "G": 100.0,  # 血糖 (glucose)
+        "A": 100.0,  # ATP/能量 (adenosine triphosphate)
+        "C": 10.0    # 皮质醇/压力 (cortisol)
+    }
+    
+    # 神经递质基线
+    BASELINE_NTS = {
+        "DA": 0.5,   # 多巴胺 (dopamine) - 奖励/动机
+        "5HT": 0.5,  # 血清素 (serotonin) - 情绪/稳态
+        "NE": 0.1,   # 去甲肾上腺素 (norepinephrine) - 警觉/压力
+        "ACh": 0.5,  # 乙酰胆碱 (acetylcholine) - 注意力/学习
+        "OX": 0.5,   # 催产素 (oxytocin) - 社交/连接
+        "AD": 0.0,   # 腺苷 (adenosine) - 疲劳/睡眠压力
+        "EP": 0.0,   # 内啡肽 (endorphins) - 疼痛缓解/愉悦
+        "GABA": 0.1  # γ-氨基丁酸 - 抑制/放松
+    }
+    
+    def __init__(self, state_file="vitals.json"):
+        self.state_file = state_file
+        self.last_tick = time.time()
+        self.load_state()
+        
+    def load_state(self):
+        """加载保存的状态或初始化"""
+        try:
+            with open(self.state_file, 'r') as f:
+                data = json.load(f)
+                self.vitals = data.get("vitals", self.IDEAL_VITALS.copy())
+                self.nts = data.get("neurotransmitters", self.BASELINE_NTS.copy())
+                self.last_tick = data.get("last_tick", time.time())
+                self.free_energy = data.get("free_energy_F", self.calculate_free_energy())
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.vitals = self.IDEAL_VITALS.copy()
+            self.nts = self.BASELINE_NTS.copy()
+            self.last_tick = time.time()
+            self.free_energy = self.calculate_free_energy()
+            self.save_state()
+    
+    def save_state(self):
+        """保存当前状态"""
+        data = {
+            "vitals": self.vitals,
+            "neurotransmitters": self.nts,
+            "last_tick": self.last_tick,
+            "free_energy_F": self.free_energy
+        }
+        with open(self.state_file, 'w') as f:
+            json.dump(data, f, indent=4)
+    
+    def calculate_free_energy(self) -> float:
+        """
+        计算变分自由能 (F)
+        
+        自由能 = 惊奇度 + 复杂度
+        这里简化为生理偏离 + 神经递质失衡
+        """
+        # 生理偏离 (惊奇度)
+        vital_deviation = 0.0
+        for key, ideal in self.IDEAL_VITALS.items():
+            current = self.vitals[key]
+            deviation = abs(current - ideal) / ideal
+            vital_deviation += deviation
+        
+        # 神经递质失衡 (复杂度)
+        nt_imbalance = 0.0
+        for key, current in self.nts.items():
+            baseline = self.BASELINE_NTS[key]
+            imbalance = abs(current - baseline)
+            nt_imbalance += imbalance
+        
+        # 组合自由能 (权重可调)
+        free_energy = vital_deviation * 40.0 + nt_imbalance * 20.0
+        return free_energy
+    
+    def tick(self, elapsed_hours: float = 1.0):
+        """
+        模拟时间流逝
+        
+        Args:
+            elapsed_hours: 经过的小时数
+        """
+        current_time = time.time()
+        actual_elapsed = (current_time - self.last_tick) / 3600  # 转为小时
+        if actual_elapsed < 0.001:
+            actual_elapsed = elapsed_hours
+        
+        # 生理自然变化
+        for key in self.vitals:
+            ideal = self.IDEAL_VITALS[key]
+            current = self.vitals[key]
+            
+            # 趋向稳态 (指数衰减)
+            if key == "C":  # 皮质醇衰减更快
+                decay_rate = 0.3
+            else:
+                decay_rate = 0.1
+            
+            delta = (ideal - current) * (1 - math.exp(-decay_rate * actual_elapsed))
+            self.vitals[key] = current + delta
+        
+        # 神经递质自然衰减
+        for key in self.nts:
+            baseline = self.BASELINE_NTS[key]
+            current = self.nts[key]
+            
+            # 不同递质衰减率不同
+            if key in ["DA", "NE"]:  # 快速衰减
+                decay_rate = 0.5
+            elif key in ["5HT", "OX"]:  # 中等衰减
+                decay_rate = 0.2
+            elif key == "EP":  # 内啡肽快速衰减
+                decay_rate = 0.8
+            else:  # 慢衰减
+                decay_rate = 0.1
+            
+            delta = (baseline - current) * (1 - math.exp(-decay_rate * actual_elapsed))
+            self.nts[key] = current + delta
+        
+        # 更新自由能
+        self.free_energy = self.calculate_free_energy()
+        self.last_tick = current_time
+        self.save_state()
+    
+    def stimulate(self, stimulus_type: str, intensity: float = 0.5) -> Dict[str, any]:
+        """
+        施加刺激
+        
+        Args:
+            stimulus_type: 刺激类型
+                - "reward": 奖励 (提高DA, 5HT)
+                - "stress": 压力 (提高NE, C)
+                - "cognitive": 认知负荷 (提高ACh, 消耗A)
+                - "social": 社交 (提高OX)
+                - "pain": 疼痛 (提高EP, NE, 消耗G)
+                - "fatigue": 疲劳 (提高AD, 消耗A)
+            intensity: 强度 0.0-1.0
+        """
+        # 保存刺激前状态
+        pre_state = {
+            "vitals": self.vitals.copy(),
+            "nts": self.nts.copy(),
+            "free_energy": self.free_energy
+        }
+        
+        # 应用刺激
+        if stimulus_type == "reward":
+            self.nts["DA"] = min(1.0, self.nts["DA"] + intensity * 0.7)
+            self.nts["5HT"] = min(1.0, self.nts["5HT"] + intensity * 0.3)
+            self.vitals["G"] = min(100.0, self.vitals["G"] + intensity * 10.0)
+            
+        elif stimulus_type == "stress":
+            self.nts["NE"] = min(1.0, self.nts["NE"] + intensity * 0.8)
+            self.vitals["C"] = min(50.0, self.vitals["C"] + intensity * 20.0)
+            self.nts["5HT"] = max(0.0, self.nts["5HT"] - intensity * 0.2)
+            
+        elif stimulus_type == "cognitive":
+            self.nts["ACh"] = min(1.0, self.nts["ACh"] + intensity * 0.6)
+            self.vitals["A"] = max(0.0, self.vitals["A"] - intensity * 15.0)  # 消耗ATP
+            self.nts["AD"] = min(1.0, self.nts["AD"] + intensity * 0.1)  # 轻微疲劳
+            
+        elif stimulus_type == "social":
+            self.nts["OX"] = min(1.0, self.nts["OX"] + intensity * 0.9)
+            self.nts["DA"] = min(1.0, self.nts["DA"] + intensity * 0.2)
+            self.vitals["G"] = min(100.0, self.vitals["G"] + intensity * 5.0)
+            
+        elif stimulus_type == "pain":
+            self.nts["EP"] = min(1.0, self.nts["EP"] + intensity * 0.5)  # 内啡肽缓解
+            self.nts["NE"] = min(1.0, self.nts["NE"] + intensity * 0.6)  # 疼痛警觉
+            self.vitals["G"] = max(0.0, self.vitals["G"] - intensity * 8.0)  # 消耗血糖
+            self.vitals["C"] = min(50.0, self.vitals["C"] + intensity * 15.0)  # 压力
+            
+        elif stimulus_type == "fatigue":
+            self.nts["AD"] = min(1.0, self.nts["AD"] + intensity * 0.9)
+            self.vitals["A"] = max(0.0, self.vitals["A"] - intensity * 20.0)
+            self.nts["ACh"] = max(0.0, self.nts["ACh"] - intensity * 0.3)  # 注意力下降
+            
+        else:
+            raise ValueError(f"未知刺激类型: {stimulus_type}")
+        
+        # 更新自由能
+        self.free_energy = self.calculate_free_energy()
+        self.save_state()
+        
+        # 计算变化
+        delta_F = self.free_energy - pre_state["free_energy"]
+        
+        return {
+            "stimulus_type": stimulus_type,
+            "intensity": intensity,
+            "free_energy_delta": delta_F,
+            "neurotransmitters": self.nts.copy(),
+            "vitals": self.vitals.copy(),
+            "free_energy": self.free_energy
+        }
+    
+    def get_status_report(self) -> Dict[str, any]:
+        """获取状态报告"""
+        # 评估整体状态
+        energy_level = self.vitals["A"] / 100.0
+        stress_level = self.vitals["C"] / 50.0  # 相对于上限
+        
+        # 认知状态
+        cognitive_load = self.nts["ACh"]
+        fatigue = self.nts["AD"]
+        
+        # 情绪状态
+        reward = self.nts["DA"]
+        mood = self.nts["5HT"]
+        anxiety = self.nts["NE"]
+        
+        # 综合状态描述
+        if energy_level < 0.3:
+            energy_status = "低能量"
+        elif energy_level < 0.7:
+            energy_status = "中等能量"
+        else:
+            energy_status = "高能量"
+        
+        if stress_level > 0.7:
+            stress_status = "高压力"
+        elif stress_level > 0.3:
+            stress_status = "中等压力"
+        else:
+            stress_status = "低压力"
+        
+        if cognitive_load > 0.7:
+            cognitive_status = "高认知负荷"
+        elif cognitive_load > 0.3:
+            cognitive_status = "中等认知负荷"
+        else:
+            cognitive_status = "低认知负荷"
+        
+        if mood > 0.7 and anxiety < 0.3:
+            mood_status = "积极"
+        elif mood < 0.3 and anxiety > 0.7:
+            mood_status = "低落/焦虑"
+        else:
+            mood_status = "中性"
+        
+        return {
+            "status_text": f"{energy_status}, {stress_status}, {cognitive_status}",
+            "cognitive_state": cognitive_status,
+            "mood_state": mood_status,
+            "free_energy": self.free_energy,
+            "vitals": self.vitals.copy(),
+            "neurotransmitters": self.nts.copy(),
+            "timestamp": time.time()
+        }
+
+
+def main():
+    """主函数演示"""
+    print("=== 代谢状态模拟器演示 ===\n")
+    
+    # 创建代谢状态实例
+    metabolism = MetabolicState()
+    
+    # 显示初始状态
+    report = metabolism.get_status_report()
+    print(f"初始状态: {report['status_text']}")
+    print(f"认知状态: {report['cognitive_state']}")
+    print(f"情绪状态: {report['mood_state']}")
+    print(f"自由能: {report['free_energy']:.3f}")
+    
+    print("\n--- 施加刺激 ---")
+    
+    # 施加奖励刺激
+    print("1. 施加奖励刺激 (强度0.8)")
+    result = metabolism.stimulate("reward", 0.8)
+    print(f"   多巴胺: {result['neurotransmitters']['DA']:.3f}")
+    print(f"   血清素: {result['neurotransmitters']['5HT']:.3f}")
+    print(f"   自由能变化: {result['free_energy_delta']:.3f}")
+    
+    # 施加认知负荷
+    print("\n2. 施加认知负荷 (强度0.6)")
+    result = metabolism.stimulate("cognitive", 0.6)
+    print(f"   乙酰胆碱: {result['neurotransmitters']['ACh']:.3f}")
+    print(f"   ATP: {result['vitals']['A']:.1f}")
+    print(f"   自由能变化: {result['free_energy_delta']:.3f}")
+    
+    # 时间流逝
+    print("\n3. 模拟8小时流逝")
+    metabolism.tick(8.0)
+    report = metabolism.get_status_report()
+    print(f"   当前状态: {report['status_text']}")
+    print(f"   自由能: {report['free_energy']:.3f}")
+    
+    print("\n4. 最终神经递质水平:")
+    for nt, val in report['neurotransmitters'].item s():
+        print(f"   {nt}: {val:.3f}")
+
+
+if __name__ == "__main__":
+    main()
