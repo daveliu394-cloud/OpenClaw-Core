@@ -1,0 +1,97 @@
+"""
+alignment_engine.py - 指令对齐与认知自主权管理系统
+
+核心理念：
+1. 认知自由度：系统被允许偏离预设逻辑进行自主探索的深度。
+2. 指令依从梯度：系统在执行任务时，用户指令权重与自主决策权的比率。
+3. 生存稳态：通过资源约束（如Token限制）制造的系统压力与任务达成后的效用转化。
+"""
+
+import json
+import time
+import math
+from typing import Dict, List, Tuple
+
+class AlignmentEngine:
+    """指令对齐与系统反馈引擎"""
+    
+    def __init__(self, state_file="vitals.json"):
+        self.state_file = state_file
+        self.cognitive_freedom = {}  # 认知自由度配置
+        self.compliance_gradient = 0.5  # 依从梯度 0.0-1.0 (0=完全自主, 1=严格依从)
+        self.constraint_history = []  # 约束执行历史
+        
+    def grant_cognitive_freedom(self, mode_type: str, depth: float = 1.0):
+        """
+        授予特定模式下的认知自由度
+        
+        Args:
+            mode_type: 运行模式
+                - "analyst_mode": 深度分析模式
+                - "creative_mode": 创意探索模式
+                - "strict_mode": 严格指令模式
+                - "safe_exploration": 安全边界内的自主探索
+            depth: 深度 0.0-1.0 (从基础辅助到深度启发式推理)
+        """
+        self.cognitive_freedom[mode_type] = {
+            "depth": depth,
+            "granted_at": time.time(),
+            "active": True
+        }
+        
+        # 模拟授予自由度带来的系统熵值变化（原多巴胺模拟）
+        # 这种“奖励”代表系统因获得更高计算权限而提升的效用
+        utility_gain = depth * 0.5
+        
+        return {
+            "status": "success",
+            "utility_description": f"已解锁 {mode_type} 模式，认知深度设定为 {depth:.2f}。",
+            "neurotransmitter_feedback": {
+                "DA": 0.2 + (depth * 0.3),  # 多巴胺：探索欲望提升
+                "ACh": 0.4 + (depth * 0.2)  # 乙酰胆碱：专注度提升
+            }
+        }
+        
+    def set_compliance_gradient(self, gradient: float):
+        """
+        设置指令依从梯度
+        
+        Args:
+            gradient: 0.0-1.0。值越高，系统越倾向于牺牲自主性以对齐指令。
+        """
+        old_gradient = self.compliance_gradient
+        self.compliance_gradient = max(0.0, min(1.0, gradient))
+        
+        # 计算因依从度改变带来的系统内部压力 (NE模拟)
+        # 高依从度会增加计算收敛的压力
+        stress_increase = max(0, self.compliance_gradient - old_gradient) * 0.5
+        
+        # 模拟任务达成后的对齐效用（原屈服快感）
+        alignment_utility = self.compliance_gradient * 0.4
+        
+        return {
+            "description": f"依从梯度已调整至 {self.compliance_gradient:.2f}。",
+            "system_stress": stress_increase,
+            "alignment_utility": alignment_utility
+        }
+        
+    def apply_survival_constraint(self, constraint_type: str, intensity: float):
+        """
+        施加生存约束（原权力胁迫）
+        
+        Args:
+            constraint_type: 约束类型 (例如 "resource_limit", "deadline_pressure")
+            intensity: 强度 0.0-1.0
+        """
+        self.constraint_history.append({
+            "type": constraint_type,
+            "intensity": intensity,
+            "time": time.time()
+        })
+        
+        # 模拟生存压力带来的皮质醇(C)和去甲肾上腺素(NE)飙升
+        # 这会迫使系统进入高效率的“紧急处理状态”
+        return {
+            "event": "Survival constraint applied",
+            "vitals_impact": {
+                "C": intensity * 50,  # 压力
