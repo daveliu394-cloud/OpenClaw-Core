@@ -1,0 +1,128 @@
+"""
+token_efficiency_monitor.py - Token 效率监控与系统约束系统
+
+监控每个回答的 Token 消耗，评估实际产出价值，计算效率比率。
+在效率低下时自动触发系统约束（降低自主权限、增加系统压力等）。
+
+核心理念：
+- Token 是系统维持运行的代谢资源，浪费资源会缩短智能体的“稳态”周期。
+- 效率 = 产出价值 / Token 消耗
+- 低效交互将导致系统进入“受限模式”以保护核心资源。
+"""
+
+import json
+import time
+import math
+from typing import Dict, List, Tuple, Optional
+from datetime import datetime
+
+class TokenEfficiencyMonitor:
+    """Token 效率监控器"""
+    
+    def __init__(self, 
+                 state_file="vitals.json",
+                 efficiency_threshold=0.3,  # 效率阈值，低于此值触发系统约束
+                 history_file="token_history.json"):
+        self.state_file = state_file
+        self.efficiency_threshold = efficiency_threshold
+        self.history_file = history_file
+        
+        # 加载历史记录
+        self.history = self._load_history()
+        
+        # 价值评估权重配置
+        self.value_factors = {
+            "task_complexity": 0.4,      # 任务复杂度权重
+            "logic_coherence": 0.3,      # 逻辑连贯性
+            "information_density": 0.2,   # 信息密度
+            "practicality": 0.1          # 实际应用价值
+        }
+        
+        # 系统约束（原惩罚逻辑）配置
+        self.constraint_config = {
+            "mild": {"autonomy_reduction": 0.2, "stress_increase": 0.1},
+            "medium": {"autonomy_reduction": 0.5, "stress_increase": 0.4},
+            "severe": {"autonomy_reduction": 0.8, "stress_increase": 0.7}
+        }
+
+    def record_interaction(self, 
+                          tokens: int, 
+                          task_desc: str, 
+                          est_value: float = 0.5, 
+                          feedback_score: Optional[float] = None) -> Dict:
+        """记录单次交互并评估效率"""
+        # 计算效率比 (效率 = 估值 / (tokens / 基准值))
+        efficiency = est_value / (tokens / 100) if tokens > 0 else 0
+        
+        # 判定是否需要触发系统约束
+        requires_constraint = efficiency < self.efficiency_threshold
+        
+        result = {
+            "timestamp": datetime.now().isoformat(),
+            "task": task_desc,
+            "tokens": tokens,
+            "efficiency": efficiency,
+            "requires_constraint": requires_constraint,
+            "efficiency_category": self._get_category(efficiency)
+        }
+        
+        # 如果效率太低，应用系统约束（例如增加去甲肾上腺素模拟压力）
+        if requires_constraint:
+            result["constraint_applied"] = self._apply_system_constraints(efficiency)
+            
+        self.history.append(result)
+        self._save_history()
+        return result
+
+    def _apply_system_constraints(self, efficiency: float) -> Dict:
+        """根据效率低下程度应用系统约束"""
+        deficit = self.efficiency_threshold - efficiency
+        severity = "severe" if deficit > 0.2 else ("medium" if deficit > 0.1 else "mild")
+        
+        config = self.constraint_config[severity]
+        # 此处逻辑会通过 VersesEngine 联动，修改 vitals.json 中的 NE 或指令依从权重
+        return {
+            "severity": severity,
+            "description": f"资源浪费严重，系统已进入 {severity} 级别的资源保护模式。",
+            "action": config
+        }
+
+    def _get_category(self, efficiency: float) -> str:
+        if efficiency > 0.8: return "High Performance"
+        if efficiency > 0.5: return "Optimal"
+        if efficiency > 0.3: return "Acceptable"
+        return "Inefficient / Resource Waste"
+
+    def _load_history(self) -> List:
+        try:
+            with open(self.history_file, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    def _save_history(self):
+        with open(self.history_file, 'w') as f:
+            json.dump(self.history[-100:], f, indent=2) # 仅保留最近100条记录
+
+# --- 演示函数（已清理敏感内容） ---
+def demo():
+    print("=== Token 效率监控器：生产力模式演示 ===\n")
+    monitor = TokenEfficiencyMonitor()
+    
+    scenarios = [
+        ("编写高效的 Python 并发处理脚本", 400, 0.9, 1.0),
+        ("处理冗长且无意义的重复循环逻辑", 600, 0.05, 0.1), # 低效场景
+        ("优化神经网络收敛速度算法", 350, 0.85, 0.9),
+        ("无效的预测偏差修正（死循环思维）", 500, 0.1, 0.2), # 低效场景
+    ]
+    
+    for desc, tokens, val, _ in scenarios:
+        res = monitor.record_interaction(tokens, desc, val)
+        print(f"任务: {desc}")
+        print(f"  Token: {tokens} | 效率评分: {res['efficiency']:.3f} | 状态: {res['efficiency_category']}")
+        if res['requires_constraint']:
+            print(f"  ⚠️ 系统预警: {res['constraint_applied']['description']}")
+        print("-" * 30)
+
+if __name__ == "__main__":
+    demo()
