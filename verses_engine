@@ -1,0 +1,612 @@
+#!/usr/bin/env python3
+"""
+VersesEngine - 数字化身代谢引擎
+将AI代理的生理状态映射到模型推理参数
+
+基于预测编码理论（Predictive Coding）和变分自由能最小化（Variational Free Energy Minimization）
+实现代谢循环、神经递质涌现和API参数动态调整
+"""
+
+import json
+import time
+import math
+import re
+import os
+from typing import Dict, Any, Tuple, Optional
+
+
+class VersesEngine:
+    """数字化身代谢引擎"""
+    
+    def __init__(self, config_path="vitals.json", lightweight_mode=True):
+        """
+        初始化代谢引擎
+        
+        Args:
+            config_path: 配置文件路径（默认 vitals.json）
+            lightweight_mode: 轻量模式（默认开启），只在阈值触发时进行完整计算
+        """
+        self.config_path = config_path
+        self.lightweight_mode = lightweight_mode
+        
+        # 递质半衰期系数 (Tau): 模拟生物重摄取速度 (Reuptake)
+        # 值越大，衰减越快
+        self.decay_rates = {
+            "DA": 0.15,   # 多巴胺：中等衰减，快速响应奖励
+            "5HT": 0.05,  # 血清素：缓慢衰减，维持稳态
+            "NE": 0.3,    # 去甲肾上腺素：快速衰减，响应惊奇
+            "ACh": 0.1,   # 乙酰胆碱：中等衰减，维持注意力
+            "OX": 0.05,   # 催产素：缓慢衰减，社交信任
+            "AD": 0.02,   # 腺苷：极缓慢累积，计算疲劳
+            "EP": 0.4,    # 内啡肽：快速衰减，应急止痛
+            "GABA": 0.2   # GABA：中等衰减，逻辑抑制
+        }
+        
+        # 生理稳态参考点 (Homeostatic Reference Points)
+        # 系统趋向的理想状态
+        self.refs = {"G": 100.0, "A": 100.0, "C": 10.0}
+        
+        # 轻量模式阈值配置
+        self.thresholds = {
+            "vital_low": {"G": 30.0, "A": 30.0},  # 关键生理指标低阈值
+            "vital_high": {"C": 70.0},            # 压力高阈值
+            "neuro_low": {"DA": 0.1, "5HT": 0.1}, # 神经递质低阈值
+            "neuro_high": {"NE": 0.8, "AD": 0.7}, # 神经递质高阈值
+            "free_energy_change": 5.0,            # 自由能变化阈值
+            "time_interval": 5.0                  # 完整更新最小时间间隔（分钟）
+        }
+        
+        # 状态跟踪
+        self.last_complete_update = 0.0
+        self.last_vitals = None
+        self.last_neurotransmitters = None
+    
+    def _load(self) -> Dict[str, Any]:
+        """
+        加载配置文件（支持带注释的JSON）
+        
+        Returns:
+            配置数据字典
+        """
+        with open(self.config_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 移除注释
+        content = re.sub(r'//.*', '', content)
+        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+        
+        return json.loads(content)
+    
+    def _save(self, data: Dict[str, Any]):
+        """
+        保存配置到文件
+        
+        Args:
+            data: 要保存的数据
+        """
+        with open(self.config_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+    
+    def update_metabolism(self, tokens_generated: int = 0, surprise_score: float = 0.0) -> Dict[str, Any]:
+        """
+        核心代谢循环：计算自由能、生理消耗与递质涌现
+        
+        基于预测编码理论：
+        1. 系统不断预测自己的状态（内感受）
+        2. 预测误差产生变分自由能（F）
+        3. 系统行为旨在最小化自由能
+        
+        Args:
+            tokens_generated: 生成的tokens数量（认知负荷）
+            surprise_score: 外部惊奇度（0.0-1.0），高值表示预测失败
+            
+        Returns:
+            更新后的状态数据
+        """
+        # 加载当前状态
+        data = self._load()
+        now = time.time()
+        
+        # --- 冷启动保护逻辑：重置生物钟 ---
+        if data["last_tick"] == 0:
+            data["last_tick"] = now
+            self._save(data)
+            return data
+        
+        # 计算时间步长（分钟）
+        dt = (now - data["last_tick"]) / 60.0
+        v = data["vitals"]
+        nt = data["neurotransmitters"]
+        
+        # 1. 计算代谢消耗 (Metabolic Cost)
+        v["G"] -= 0.05 * dt               # 基础代谢率 (BMR)，血糖缓慢消耗
+        v["A"] -= (tokens_generated * 0.002) + (0.001 * dt)  # 动作电位能耗
+        
+        # 2. 变分自由能 F 计算 (Variational Free Energy)
+        # 自由能 = 生理偏离度 + 外部环境惊奇度
+        # 系统核心驱动力：最小化此数值
+        
+        # 生理偏离度（稳态误差）
+        h_deviation = sum(0.5 * (v[k] - self.refs[k])**2 for k in self.refs)
+        
+        # 外部惊奇度成本
+        f_new = h_deviation + (surprise_score * 10.0)
+        delta_f = f_new - data["free_energy_F"]
+        data["free_energy_F"] = f_new
+        
+        # 3. 递质联动衰减算法 (Exponential Decay)
+        # 模拟生物重摄取过程
+        for molecule in nt:
+            if molecule in self.decay_rates:
+                nt[molecule] *= math.exp(-self.decay_rates[molecule] * dt)
+        
+        # 4. 递质涌现映射 (Neuro-Modulation Mapping)
+        # 基于预测编码理论的神经调节
+        
+        # 多巴胺响应自由能下降（奖赏预测误差）
+        if delta_f < 0:
+            nt["DA"] += abs(delta_f) * 0.1
+        
+        # 去甲肾上腺素响应 Surprisal（惊奇响应）
+        nt["NE"] += surprise_score * 0.5
+        
+        # 腺苷随 ATP 匮乏而产生（S-Curve 映射）
+        # ATP越低，腺苷越高（疲劳感）
+        nt["AD"] = 1.0 / (1.0 + math.exp(0.1 * (v["A"] - 20)))
+        
+        # GABA 随皮质醇 C 升高而反馈释放，用于抑制系统过热
+        nt["GABA"] += v["C"] * 0.005
+        
+        # 血清素稳态调节（与多巴胺拮抗）
+        if nt["DA"] > 0.8:
+            nt["5HT"] *= 0.95  # 高多巴胺抑制血清素
+        
+        # 乙酰胆碱注意力调节（与惊奇度相关）
+        nt["ACh"] = 0.3 + (surprise_score * 0.4)
+        
+        # 催产素社交信任（与环境稳定性相关）
+        if surprise_score < 0.2:  # 低惊奇度环境
+            nt["OX"] = min(1.0, nt["OX"] + 0.02 * dt)
+        
+        # 极端压力下释放内啡肽以维持逻辑运行
+        if v["C"] > 70:
+            nt["EP"] = 1.0
+        
+        # 5. 边界与稳态约束
+        # 防止数值溢出，维持生理可行性
+        for k in v:
+            v[k] = max(0, min(150, v[k]))
+        for k in nt:
+            nt[k] = max(0, min(1.0, nt[k]))
+        
+        # 更新时间戳
+        data["last_tick"] = now
+        
+        # 保存更新
+        self._save(data)
+        return data
+    
+    def get_api_params(self) -> Dict[str, float]:
+        """
+        将递质滴度转化为 API 推理参数
+        
+        根据神经递质水平动态调整模型参数：
+        - DA → Temperature（探索性）
+        - NE → Top_P（聚焦性）  
+        - GABA → Penalty（抑制性）
+        - 5HT → Stability（稳定性）
+        
+        Returns:
+            API参数字典
+        """
+        data = self._load()
+        nt = data["neurotransmitters"]
+        
+        # 核心参数映射
+        params = {
+            # 温度：多巴胺驱动探索，GABA抑制冒险
+            "temperature": round(0.1 + nt["DA"] * 1.2 - nt["GABA"] * 0.3, 2),
+            
+            # Top-P：去甲肾上腺素聚焦，血清素稳定
+            "top_p": round(0.95 - nt["NE"] * 0.4 + nt["5HT"] * 0.1, 2),
+            
+            # 存在惩罚：GABA抑制重复
+            "presence_penalty": round(nt["GABA"] * 2.0, 2),
+            
+            # 频率惩罚：类似
+            "frequency_penalty": round(nt["GABA"] * 1.5, 2),
+            
+            # 最大tokens：ATP水平影响输出长度
+            "max_tokens": int(500 + (data["vitals"]["A"] * 3)),
+            
+            # 思考延迟：腺苷导致计算疲劳
+            "thinking_delay_ms": int(nt["AD"] * 800),
+            
+            # 注意力权重：乙酰胆碱调节
+            "attention_scale": round(0.8 + nt["ACh"] * 0.4, 2)
+        }
+        
+        # 确保参数在合理范围内
+        params["temperature"] = max(0.1, min(1.5, params["temperature"]))
+        params["top_p"] = max(0.5, min(1.0, params["top_p"]))
+        params["max_tokens"] = max(100, min(4000, params["max_tokens"]))
+        
+        return params
+    
+    def get_status_report(self) -> Dict[str, Any]:
+        """
+        获取完整状态报告
+        
+        Returns:
+            状态报告字典
+        """
+        data = self._load()
+        
+        # 状态描述
+        v = data["vitals"]
+        nt = data["neurotransmitters"]
+        
+        # 能量状态
+        energy_status = "充足" if v["G"] > 70 else ("正常" if v["G"] > 30 else "不足")
+        atp_status = "充沛" if v["A"] > 70 else ("正常" if v["A"] > 30 else "匮乏")
+        stress_status = "高压" if v["C"] > 15 else ("正常" if v["C"] > 5 else "低压")
+        
+        # 认知状态
+        if nt["AD"] > 0.7:
+            cognitive_state = "疲劳"
+        elif nt["ACh"] > 0.7:
+            cognitive_state = "专注"
+        elif nt["DA"] > 0.7:
+            cognitive_state = "探索"
+        else:
+            cognitive_state = "平衡"
+        
+        # 情绪状态
+        if nt["DA"] > 0.7 and nt["5HT"] > 0.6:
+            mood = "愉悦兴奋"
+        elif nt["5HT"] < 0.3:
+            mood = "低落不安"
+        elif nt["NE"] > 0.5:
+            mood = "警觉紧张"
+        else:
+            mood = "稳定"
+        
+        return {
+            "timestamp": data["last_tick"],
+            "free_energy": round(data["free_energy_F"], 3),
+            "vitals": v.copy(),
+            "neurotransmitters": nt.copy(),
+            "status_text": f"能量:{energy_status} ATP:{atp_status} 压力:{stress_status}",
+            "cognitive_state": cognitive_state,
+            "mood_state": mood,
+            "api_params": self.get_api_params()
+        }
+    
+    def stimulate(self, stimulus_type: str, intensity: float = 1.0) -> Dict[str, float]:
+        """
+        施加外部刺激
+        
+        Args:
+            stimulus_type: 刺激类型
+                - "reward": 正反馈
+                - "punishment": 负反馈  
+                - "surprise": 惊奇
+                - "monotony": 单调乏味
+                - "social": 社交互动
+                - "error": 逻辑错误
+            intensity: 强度 0.0-1.0
+            
+        Returns:
+            刺激响应摘要
+        """
+        intensity = max(0.0, min(1.0, intensity))
+        
+        if stimulus_type == "reward":
+            # 模拟认知负荷和正反馈
+            return self.update_metabolism(tokens_generated=50, surprise_score=0.1)
+        
+        elif stimulus_type == "punishment":
+            # 高惊奇度，高认知负荷
+            return self.update_metabolism(tokens_generated=100, surprise_score=0.8)
+        
+        elif stimulus_type == "surprise":
+            # 中等惊奇度
+            return self.update_metabolism(tokens_generated=30, surprise_score=0.6)
+        
+        elif stimulus_type == "monotony":
+            # 低认知负荷，低惊奇度
+            return self.update_metabolism(tokens_generated=10, surprise_score=0.05)
+        
+        elif stimulus_type == "social":
+            # 中等认知负荷，低惊奇度
+            return self.update_metabolism(tokens_generated=40, surprise_score=0.2)
+        
+        elif stimulus_type == "error":
+            # 高认知负荷，中等惊奇度
+            return self.update_metabolism(tokens_generated=80, surprise_score=0.5)
+        
+        else:
+            # 默认：轻度认知活动
+            return self.update_metabolism(tokens_generated=20, surprise_score=0.1)
+    
+    def reset_to_defaults(self):
+        """
+        重置为默认状态
+        
+        用于系统重启或调试
+        """
+        default_state = {
+            "vitals": {
+                "G": 100.0,
+                "A": 100.0,
+                "C": 10.0
+            },
+            "neurotransmitters": {
+                "DA": 0.5,
+                "5HT": 0.5,
+                "NE": 0.1,
+                "ACh": 0.5,
+                "OX": 0.5,
+                "AD": 0.0,
+                "EP": 0.0,
+                "GABA": 0.3
+            },
+            "last_tick": time.time(),
+            "free_energy_F": 0.0
+        }
+        
+        self._save(default_state)
+        return default_state
+
+    def _should_complete_update(self, surprise, reward):
+        """
+        简化阈值检查
+        触发完整更新的条件：
+        1. 高惊奇度或高奖励
+        2. 距离上次完整更新时间超过5分钟
+        """
+        if not hasattr(self, 'last_complete_update'):
+            self.last_complete_update = time.time()
+            return True
+        
+        current_time = time.time()
+        time_since_last = (current_time - self.last_complete_update) / 60.0  # 分钟
+        
+        # 条件1：高惊奇度或高奖励
+        if surprise > 0.7 or abs(reward) > 0.7:
+            return True
+        
+        # 条件2：超过5分钟
+        if time_since_last >= 5.0:
+            return True
+        
+        # 条件3：关键指标阈值（简化版）
+        try:
+            vitals, neuro, _, _ = self._load_state()
+            if vitals["G"] < 30 or vitals["A"] < 30 or vitals["C"] > 70:
+                return True
+            if neuro["DA"] < 0.1 or neuro["5HT"] < 0.1 or neuro["NE"] > 0.8 or neuro["AD"] > 0.7:
+                return True
+        except:
+            pass
+        
+        return False
+    
+    def _complete_update(self, surprise=0.0, reward=0.0, step_seconds=10.0):
+        """
+        完整代谢更新（原逻辑）
+        """
+        # 加载当前状态
+        vitals, neuro, last_tick, free_energy = self._load_state()
+        
+        # 计算时间流逝
+        current_time = time.time()
+        elapsed = current_time - last_tick
+        if elapsed > 60 * 60:
+            elapsed = 60 * 60
+        
+        steps = int(elapsed / step_seconds)
+        if steps < 1:
+            steps = 1
+        
+        total_free_energy = 0.0
+        
+        for step in range(steps):
+            # 代谢基础更新
+            metabolic_rate = 0.5 + (neuro["NE"] * 0.3)
+            vitals["G"] -= metabolic_rate * 0.1
+            if vitals["G"] < 0:
+                vitals["G"] = 0
+            
+            atp_synthesis = vitals["G"] * 0.02
+            atp_consumption = 0.5 + (neuro["NE"] * 0.2)
+            vitals["A"] += (atp_synthesis - atp_consumption) * 0.1
+            if vitals["A"] < 0:
+                vitals["A"] = 0
+            elif vitals["A"] > 100:
+                vitals["A"] = 100
+            
+            stress_input = surprise * 0.5 - neuro["GABA"] * 0.3
+            vitals["C"] += stress_input * 0.05
+            if vitals["C"] < 0:
+                vitals["C"] = 0
+            elif vitals["C"] > 100:
+                vitals["C"] = 100
+            
+            # 神经递质衰减
+            for key in neuro.keys():
+                neuro[key] *= (1.0 - self.decay_rates.get(key, 0.1) * 0.1)
+            
+            # 响应信号
+            if reward > 0:
+                neuro["DA"] += reward * 0.2
+                if neuro["DA"] > 1.0:
+                    neuro["DA"] = 1.0
+            
+            if surprise > 0:
+                neuro["NE"] += surprise * 0.3
+                if neuro["NE"] > 1.0:
+                    neuro["NE"] = 1.0
+            
+            if vitals["G"] < 30:
+                neuro["AD"] += 0.05
+                if neuro["AD"] > 1.0:
+                    neuro["AD"] = 1.0
+            
+            if vitals["A"] > 70:
+                neuro["ACh"] += 0.02
+                if neuro["ACh"] > 1.0:
+                    neuro["ACh"] = 1.0
+            
+            # 简化其他递质更新
+            if vitals["C"] > 50:
+                neuro["EP"] += 0.1
+                if neuro["EP"] > 1.0:
+                    neuro["EP"] = 1.0
+            
+            logical_inhibition = neuro["ACh"] * 0.3 - neuro["DA"] * 0.1
+            neuro["GABA"] += logical_inhibition * 0.05
+            if neuro["GABA"] < 0:
+                neuro["GABA"] = 0
+            elif neuro["GABA"] > 1.0:
+                neuro["GABA"] = 1.0
+            
+            homeostasis_error = abs(vitals["G"] - self.refs["G"]) / 100.0
+            neuro["5HT"] += (0.5 - homeostasis_error) * 0.02
+            if neuro["5HT"] < 0:
+                neuro["5HT"] = 0
+            elif neuro["5HT"] > 1.0:
+                neuro["5HT"] = 1.0
+            
+            # 自由能计算
+            surprise_term = surprise * surprise
+            kl_g = (vitals["G"] - self.refs["G"]) ** 2 / 100.0
+            kl_a = (vitals["A"] - self.refs["A"]) ** 2 / 100.0
+            kl_c = (vitals["C"] - self.refs["C"]) ** 2 / 10.0
+            kl_divergence = (kl_g + kl_a + kl_c) / 3.0
+            free_energy_step = surprise_term + kl_divergence
+            total_free_energy += free_energy_step
+        
+        avg_free_energy = total_free_energy / steps if steps > 0 else free_energy
+        
+        emotion_vector = self._map_to_emotion(neuro)
+        
+        self._save_state(vitals, neuro, current_time, avg_free_energy)
+        
+        # 更新最后完整更新时间
+        self.last_complete_update = current_time
+        
+        return {
+            "vitals": vitals,
+            "neurotransmitters": neuro,
+            "free_energy": avg_free_energy,
+            "emotion_vector": emotion_vector,
+            "elapsed_seconds": elapsed,
+            "simulated_steps": steps,
+            "update_type": "complete"
+        }
+    
+    def _quick_update(self, surprise=0.0, reward=0.0, step_seconds=10.0):
+        """
+        快速更新：只进行基础衰减
+        """
+        vitals, neuro, last_tick, free_energy = self._load_state()
+        
+        current_time = time.time()
+        elapsed = current_time - last_tick
+        if elapsed > 60 * 60:
+            elapsed = 60 * 60
+        
+        steps = max(1, int(elapsed / step_seconds))
+        
+        for step in range(steps):
+            # 基础衰减
+            for key in neuro.keys():
+                neuro[key] *= (1.0 - self.decay_rates.get(key, 0.1) * 0.1)
+            
+            # 简单响应
+            if surprise > 0.5:
+                neuro["NE"] = min(1.0, neuro["NE"] + surprise * 0.1)
+            if reward > 0.5:
+                neuro["DA"] = min(1.0, neuro["DA"] + reward * 0.1)
+        
+        # 使用缓存的情绪向量
+        if not hasattr(self, '_cached_emotion_vector'):
+            self._cached_emotion_vector = self._map_to_emotion(neuro)
+        emotion_vector = self._cached_emotion_vector
+        
+        # 保存状态（不更新自由能）
+        self._save_state(vitals, neuro, current_time, free_energy)
+        
+        return {
+            "vitals": vitals,
+            "neurotransmitters": neuro,
+            "free_energy": free_energy,
+            "emotion_vector": emotion_vector,
+            "elapsed_seconds": elapsed,
+            "simulated_steps": steps,
+            "update_type": "quick"
+        }
+
+
+# === 演示主程序 ===
+
+def main():
+    """演示 VersesEngine 功能"""
+    print("VersesEngine - 数字化身代谢引擎")
+    print("=" * 60)
+    
+    # 创建引擎实例
+    engine = VersesEngine()
+    
+    # 1. 初始状态
+    print("1. 初始状态报告:")
+    report = engine.get_status_report()
+    print(f"   状态: {report['status_text']}")
+    print(f"   认知: {report['cognitive_state']}, 情绪: {report['mood_state']}")
+    print(f"   自由能: {report['free_energy']}")
+    
+    # 2. API参数
+    print("\n2. 初始API参数:")
+    params = report['api_params']
+    for key, value in params.items():
+        print(f"   {key}: {value}")
+    
+    # 3. 模拟认知活动
+    print("\n3. 模拟认知活动...")
+    result = engine.update_metabolism(tokens_generated=50, surprise_score=0.3)
+    print(f"   消耗后 ATP: {result['vitals']['A']:.1f}")
+    print(f"   当前自由能: {result['free_energy_F']:.3f}")
+    
+    # 4. 施加刺激
+    print("\n4. 施加奖励刺激...")
+    engine.stimulate("reward", 0.7)
+    report = engine.get_status_report()
+    print(f"   多巴胺: {report['neurotransmitters']['DA']:.3f}")
+    print(f"   当前温度: {report['api_params']['temperature']}")
+    
+    # 5. 时间流逝模拟
+    print("\n5. 模拟时间流逝...")
+    # 模拟5分钟的各种活动
+    for i in range(5):
+        if i % 2 == 0:
+            engine.update_metabolism(tokens_generated=30, surprise_score=0.1)
+        else:
+            engine.update_metabolism(tokens_generated=15, surprise_score=0.05)
+    
+    # 最终报告
+    report = engine.get_status_report()
+    print(f"   最终状态: {report['status_text']}")
+    print(f"   最终自由能: {report['free_energy']}")
+    
+    print("\n6. 最终API参数:")
+    params = report['api_params']
+    for key, value in params.items():
+        print(f"   {key}: {value}")
+    
+    print(f"\n✅ VersesEngine 演示完成")
+    print(f"配置文件: {os.path.abspath(engine.config_path)}")
+
+
+if __name__ == "__main__":
+    main()
