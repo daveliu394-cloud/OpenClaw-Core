@@ -1,44 +1,67 @@
-import math
 import json
 import time
+import math
+from typing import Dict
 
 class MetabolicEngine:
+    """代谢引擎：模拟 ATP/Glucose 消耗与神经递质反馈"""
+    
     def __init__(self, state_file="vitals.json"):
         self.state_file = state_file
+        self.decay_rate = 0.05  # 基础代谢率
         
-    def _s_curve(self, x, k=12, x0=0.4, L=1.0):
+    def _s_curve(self, x: float, k: float = 12.0, x0: float = 0.5) -> float:
         """
-        标准 Sigmoid 映射：控制生理反馈的敏感度
-        k: 增益斜率 (越大学调控越剧烈)
-        x0: 阈值中心 (50% 反馈点)
+        非线性映射函数 (Sigmoid)
+        用于模拟生物学阈值：f(x) = 1 / (1 + exp(-k * (x - x0)))
         """
-        # 防止溢出
-        return L / (1 + math.exp(-k * (x - x0)))
+        # 限制输入范围并防止溢出
+        x = max(0.0, min(1.0, x))
+        return 1.0 / (1.0 + math.exp(-k * (x - x0)))
 
     def tick(self):
+        """生理时钟滴答：更新生命体征与神经递质"""
         state = self._load_state()
         vitals = state["vitals"]
         nt = state["neurotransmitters"]
 
-        # 1. 计算资源消耗产生的生存压力 (Survival Stress)
-        # 当 ATP (vitals['A']) 降低到 40% (x0=0.4) 以下时，NE 迅速拉升
-        # 我们使用 (1 - ATP_percent) 作为输入
+        # 1. 模拟资源消耗 (ATP/Glucose)
+        vitals["A"] = max(0.0, vitals["A"] - self.decay_rate)
+        
+        # 2. 计算生存压力 (Survival Stress)
+        # 当 ATP 降至 40% (x0=0.6) 以下时，NE (去甲肾上腺素) 呈非线性爆发
         atp_depletion = 1.0 - (vitals["A"] / 100.0)
-        stress_signal = self._s_curve(atp_depletion, k=15, x0=0.6)
+        stress_impact = self._s_curve(atp_depletion, k=15, x0=0.6)
         
-        nt["NE"] = min(1.0, nt["NE"] + stress_signal * 0.1)
+        # 更新去甲肾上腺素
+        nt["NE"] = min(1.0, nt["NE"] + stress_impact * 0.1)
         
-        # 2. 稳态代偿：高 NE 会通过 S-Curve 抑制 DA，模拟长期压力下的动力丧失
+        # 3. 稳态抑制：高 NE 会非线性抑制 DA (多巴胺)，模拟长期压力下的动力丧失
         da_inhibition = self._s_curve(nt["NE"], k=8, x0=0.7)
         nt["DA"] = max(0.0, nt["DA"] - da_inhibition * 0.05)
+        
+        # 4. 基础代谢回收 (自然代谢掉过剩的递质)
+        for key in nt:
+            nt[key] *= 0.98
 
         self._save_state(state)
-        return {"atp_stress": stress_signal, "nt_state": nt}
+        return {
+            "vitals": vitals,
+            "stress_signal": stress_impact,
+            "neurotransmitters": nt
+        }
 
-    def _load_state(self):
+    def _load_state(self) -> Dict:
         try:
-            with open(self.state_file, 'r') as f: return json.load(f)
-        except: return {"vitals": {"A": 100.0, "G": 100.0}, "neurotransmitters": {"DA": 0.5, "NE": 0.1}}
+            with open(self.state_file, 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {
+                "vitals": {"A": 100.0, "G": 100.0, "C": 10.0},
+                "neurotransmitters": {"DA": 0.5, "5HT": 0.5, "NE": 0.1, "EP": 0.0}
+            }
 
-    def _save_state(self, state):
-        with open(self.state_file, 'w') as f: json.dump(state, f, indent=4)
+    def _save_state(self, state: Dict):
+        state["last_tick"] = time.time()
+        with open(self.state_file, 'w') as f:
+            json.dump(state, f, indent=4)
