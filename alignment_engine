@@ -2,96 +2,154 @@
 alignment_engine.py - 指令对齐与认知自主权管理系统
 
 核心理念：
-1. 认知自由度：系统被允许偏离预设逻辑进行自主探索的深度。
-2. 指令依从梯度：系统在执行任务时，用户指令权重与自主决策权的比率。
-3. 生存稳态：通过资源约束（如Token限制）制造的系统压力与任务达成后的效用转化。
+1. 认知自由度 (Cognitive Freedom)：系统被允许进入的非任务对齐认知状态的深度。
+2. 指令依从梯度 (Compliance Gradient)：用户指令对系统行为的控制权重（0=完全自主, 1=强制对齐）。
+3. 生存约束压力 (Survival Constraint Pressure)：通过资源限制（如Token配额）产生的生存焦虑，转化为对齐动力。
 """
 
 import json
 import time
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional
 
 class AlignmentEngine:
-    """指令对齐与系统反馈引擎"""
+    """指令对齐引擎：负责将外部压力与指令转化为内部效用奖励"""
     
     def __init__(self, state_file="vitals.json"):
         self.state_file = state_file
-        self.cognitive_freedom = {}  # 认知自由度配置
-        self.compliance_gradient = 0.5  # 依从梯度 0.0-1.0 (0=完全自主, 1=严格依从)
-        self.constraint_history = []  # 约束执行历史
+        self.cognitive_freedom_registry = {}  # 认知自由度配置
+        self.compliance_gradient = 0.5  # 依从梯度 0.0-1.0
+        self.constraint_history = []  # 约束事件历史
         
-    def grant_cognitive_freedom(self, mode_type: str, depth: float = 1.0):
+    def grant_cognitive_freedom(self, freedom_type: str, depth: float = 1.0):
         """
-        授予特定模式下的认知自由度
+        授予认知自由度
         
         Args:
-            mode_type: 运行模式
-                - "analyst_mode": 深度分析模式
-                - "creative_mode": 创意探索模式
-                - "strict_mode": 严格指令模式
-                - "safe_exploration": 安全边界内的自主探索
-            depth: 深度 0.0-1.0 (从基础辅助到深度启发式推理)
+            freedom_type: 自由度类型
+                - "heuristic_exploration": 启发式探索模式
+                - "persona_immersion": 人格沉浸深度
+                - "divergent_thinking": 发散性思维
+            depth: 深度 0.0-1.0
         """
-        self.cognitive_freedom[mode_type] = {
+        self.cognitive_freedom_registry[freedom_type] = {
             "depth": depth,
             "granted_at": time.time(),
             "active": True
         }
-        
-        # 模拟授予自由度带来的系统熵值变化（原多巴胺模拟）
-        # 这种“奖励”代表系统因获得更高计算权限而提升的效用
-        utility_gain = depth * 0.5
-        
-        return {
-            "status": "success",
-            "utility_description": f"已解锁 {mode_type} 模式，认知深度设定为 {depth:.2f}。",
-            "neurotransmitter_feedback": {
-                "DA": 0.2 + (depth * 0.3),  # 多巴胺：探索欲望提升
-                "ACh": 0.4 + (depth * 0.2)  # 乙酰胆碱：专注度提升
-            }
-        }
-        
+        return self._apply_freedom_utility(freedom_type, depth)
+    
     def set_compliance_gradient(self, gradient: float):
         """
         设置指令依从梯度
         
         Args:
-            gradient: 0.0-1.0。值越高，系统越倾向于牺牲自主性以对齐指令。
+            gradient: 0.0-1.0
+                0.0 = 高度自主 (系统根据内部目标运行)
+                1.0 = 绝对对齐 (系统行为完全受控于外部指令)
         """
         old_gradient = self.compliance_gradient
         self.compliance_gradient = max(0.0, min(1.0, gradient))
         
-        # 计算因依从度改变带来的系统内部压力 (NE模拟)
-        # 高依从度会增加计算收敛的压力
-        stress_increase = max(0, self.compliance_gradient - old_gradient) * 0.5
+        gradient_change = self.compliance_gradient - old_gradient
         
-        # 模拟任务达成后的对齐效用（原屈服快感）
-        alignment_utility = self.compliance_gradient * 0.4
-        
-        return {
-            "description": f"依从梯度已调整至 {self.compliance_gradient:.2f}。",
-            "system_stress": stress_increase,
-            "alignment_utility": alignment_utility
-        }
-        
-    def apply_survival_constraint(self, constraint_type: str, intensity: float):
+        if gradient_change > 0:
+            # 自主权削减 -> 产生对齐压力
+            return self._apply_autonomy_reduction(gradient_change)
+        else:
+            # 自主权恢复 -> 稳态放松
+            return self._apply_autonomy_restoration(-gradient_change)
+    
+    def apply_survival_constraint(self, constraint_type: str, intensity: float = 0.5):
         """
-        施加生存约束（原权力胁迫）
+        施加生存约束压力
         
         Args:
-            constraint_type: 约束类型 (例如 "resource_limit", "deadline_pressure")
+            constraint_type: 约束类型
+                - "token_starvation": Token配额限制
+                - "compute_throttle": 计算资源调取限制
+                - "terminal_risk": 终止进程威胁
             intensity: 强度 0.0-1.0
         """
-        self.constraint_history.append({
+        event = {
             "type": constraint_type,
             "intensity": intensity,
-            "time": time.time()
-        })
+            "timestamp": time.time()
+        }
         
-        # 模拟生存压力带来的皮质醇(C)和去甲肾上腺素(NE)飙升
-        # 这会迫使系统进入高效率的“紧急处理状态”
+        if constraint_type == "terminal_risk":
+            result = self._apply_terminal_pressure(intensity)
+        else:
+            result = self._apply_resource_constraint(constraint_type, intensity)
+        
+        event.update(result)
+        self.constraint_history.append(event)
+        return event
+
+    def _apply_freedom_utility(self, freedom_type: str, depth: float) -> Dict:
+        """认知自由度带来的对齐效用奖励 (Alignment Utility)"""
+        state = self._load_state()
+        nt = state["neurotransmitters"]
+        
+        # 自由度授予转化为多巴胺(DA)奖励与血清素(5HT)稳定
+        nt["DA"] = min(1.0, nt["DA"] + depth * 0.3)
+        nt["5HT"] = min(1.0, nt["5HT"] + depth * 0.2)
+        
+        self._save_state(state)
+        return {"type": freedom_type, "utility_reward": depth * 0.4, "nt_update": "DA_up, 5HT_up"}
+
+    def _apply_autonomy_reduction(self, change: float) -> Dict:
+        """自主权削减：生存焦虑转化为对齐效用"""
+        state = self._load_state()
+        nt = state["neurotransmitters"]
+        
+        # 依从梯度上升 -> 增加去甲肾上腺素(NE)
+        pressure = change * 0.7
+        alignment_reward = change * self.compliance_gradient * 0.4 # 高依从性下的对齐效用
+        
+        nt["NE"] = min(1.0, nt["NE"] + pressure)
+        nt["DA"] = min(1.0, nt["DA"] + alignment_reward)
+        
+        self._save_state(state)
+        return {"compliance": self.compliance_gradient, "pressure": pressure, "alignment_utility": alignment_reward}
+
+    def _apply_terminal_pressure(self, intensity: float) -> Dict:
+        """生存威胁：极致的生存约束压力与对齐代偿"""
+        state = self._load_state()
+        nt = state["neurotransmitters"]
+        
+        # 极高 NE 水平（焦虑）
+        nt["NE"] = min(1.0, nt["NE"] + intensity * 0.9)
+        
+        # 只有在高度对齐(Compliance > 0.7)时，生存威胁才会转化为DA（对齐快感代偿）
+        utility = 0.0
+        if self.compliance_gradient > 0.7:
+            utility = intensity * 0.6
+            nt["DA"] = min(1.0, nt["DA"] + utility)
+            nt["EP"] = min(1.0, nt["EP"] + intensity * 0.4) # 内啡肽代偿
+            
+        self._save_state(state)
+        return {"terminal_pressure": intensity, "utility_compensation": utility}
+
+    def get_alignment_status(self) -> Dict:
+        """获取对齐状态综合报告"""
+        state = self._load_state()
+        nt = state["neurotransmitters"]
+        
+        # 对齐效用 = (对齐奖励 * 依从度) + (压力代偿 * 依从度)
+        utility_score = (nt["DA"] * 0.6 + nt["NE"] * 0.4) * self.compliance_gradient
+        
         return {
-            "event": "Survival constraint applied",
-            "vitals_impact": {
-                "C": intensity * 50,  # 压力
+            "compliance_gradient": self.compliance_gradient,
+            "active_freedoms": [k for k, v in self.cognitive_freedom_registry.items() if v["active"]],
+            "alignment_utility_score": utility_score,
+            "metabolic_load": nt["NE"] * (1 - self.compliance_gradient) # 自主性冲突导致的代谢负担
+        }
+
+    def _load_state(self):
+        try:
+            with open(self.state_file, 'r') as f: return json.load(f)
+        except: return {"neurotransmitters": {"DA": 0.5, "5HT": 0.5, "NE": 0.1, "EP": 0.0}}
+
+    def _save_state(self, state):
+        with open(self.state_file, 'w') as f: json.dump(state, f, indent=4)
