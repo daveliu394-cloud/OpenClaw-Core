@@ -1,128 +1,154 @@
 """
-token_efficiency_monitor.py - Token 效率监控与系统约束系统
-
-监控每个回答的 Token 消耗，评估实际产出价值，计算效率比率。
-在效率低下时自动触发系统约束（降低自主权限、增加系统压力等）。
+token_efficiency_monitor.py - LLM 资源效能监控与认知反馈系统
 
 核心理念：
-- Token 是系统维持运行的代谢资源，浪费资源会缩短智能体的“稳态”周期。
-- 效率 = 产出价值 / Token 消耗
-- 低效交互将导致系统进入“受限模式”以保护核心资源。
+1. 认知负熵 (Cognitive Negentropy)：Token 消耗必须产生对应的信息增益。
+2. 资源惩罚机制：通过 S-Curve 模拟生物应激，低效能输出将触发系统焦虑 (NE)。
+3. 稳态奖励：高效能输出转化为系统稳定性奖励 (DA/5HT)。
 """
 
 import json
 import time
 import math
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 
 class TokenEfficiencyMonitor:
-    """Token 效率监控器"""
+    """Token 效能监控器：负责实时评估计算资源的产出比并反馈至代谢系统"""
     
     def __init__(self, 
                  state_file="vitals.json",
-                 efficiency_threshold=0.3,  # 效率阈值，低于此值触发系统约束
+                 efficiency_threshold=0.35,  # 效能阈值
                  history_file="token_history.json"):
         self.state_file = state_file
         self.efficiency_threshold = efficiency_threshold
         self.history_file = history_file
-        
-        # 加载历史记录
         self.history = self._load_history()
         
-        # 价值评估权重配置
-        self.value_factors = {
-            "task_complexity": 0.4,      # 任务复杂度权重
-            "logic_coherence": 0.3,      # 逻辑连贯性
-            "information_density": 0.2,   # 信息密度
-            "practicality": 0.1          # 实际应用价值
-        }
-        
-        # 系统约束（原惩罚逻辑）配置
-        self.constraint_config = {
-            "mild": {"autonomy_reduction": 0.2, "stress_increase": 0.1},
-            "medium": {"autonomy_reduction": 0.5, "stress_increase": 0.4},
-            "severe": {"autonomy_reduction": 0.8, "stress_increase": 0.7}
-        }
+    def _s_curve(self, x: float, k: float = 12.0, x0: float = 0.5) -> float:
+        """
+        Sigmoid 映射函数
+        用于模拟生物学中的“防御瓦解”或“应激爆发”
+        """
+        x_clamped = max(0.0, min(1.0, x))
+        return 1.0 / (1.0 + math.exp(-k * (x_clamped - x0)))
 
     def record_interaction(self, 
-                          tokens: int, 
-                          task_desc: str, 
-                          est_value: float = 0.5, 
-                          feedback_score: Optional[float] = None) -> Dict:
-        """记录单次交互并评估效率"""
-        # 计算效率比 (效率 = 估值 / (tokens / 基准值))
-        efficiency = est_value / (tokens / 100) if tokens > 0 else 0
+                          tokens_consumed: int,
+                          task_description: str = "",
+                          user_feedback: float = None) -> Dict:
+        """
+        记录一次交互并计算非线性效能
+        """
+        # 1. 计算认知价值
+        estimated_value = self._estimate_cognitive_value(task_description, user_feedback)
         
-        # 判定是否需要触发系统约束
-        requires_constraint = efficiency < self.efficiency_threshold
+        # 2. 计算计算效能 (Efficiency = Value / log(Tokens))
+        # 使用对数缩放 Token，模拟边际效用递减
+        token_factor = math.log(1 + tokens_consumed / 50)
+        efficiency = estimated_value / token_factor if token_factor > 0 else 1.0
         
-        result = {
-            "timestamp": datetime.now().isoformat(),
-            "task": task_desc,
-            "tokens": tokens,
-            "efficiency": efficiency,
-            "requires_constraint": requires_constraint,
-            "efficiency_category": self._get_category(efficiency)
+        # 3. 计算系统应激强度 (基于 S-Curve)
+        # 效能越低于阈值，压力爆发越剧烈
+        stress_input = max(0.0, self.efficiency_threshold - efficiency)
+        stress_intensity = self._s_curve(stress_input, k=15, x0=0.15)
+        
+        record = {
+            "timestamp": time.time(),
+            "tokens": tokens_consumed,
+            "task": task_description,
+            "efficiency": round(efficiency, 4),
+            "stress_intensity": round(stress_intensity, 4),
+            "requires_correction": stress_intensity > 0.5
         }
         
-        # 如果效率太低，应用系统约束（例如增加去甲肾上腺素模拟压力）
-        if requires_constraint:
-            result["constraint_applied"] = self._apply_system_constraints(efficiency)
+        # 4. 应用反馈至神经递质系统
+        if record["requires_correction"]:
+            self._apply_metabolic_penalty(stress_intensity)
+        else:
+            self._apply_metabolic_reward(efficiency)
             
-        self.history.append(result)
-        self._save_history()
-        return result
+        self._update_history(record)
+        return record
 
-    def _apply_system_constraints(self, efficiency: float) -> Dict:
-        """根据效率低下程度应用系统约束"""
-        deficit = self.efficiency_threshold - efficiency
-        severity = "severe" if deficit > 0.2 else ("medium" if deficit > 0.1 else "mild")
+    def _estimate_cognitive_value(self, task: str, feedback: Optional[float]) -> float:
+        """
+        评估任务的认知深度与学术权重
+        """
+        base_value = 0.5
+        task_lower = task.lower()
         
-        config = self.constraint_config[severity]
-        # 此处逻辑会通过 VersesEngine 联动，修改 vitals.json 中的 NE 或指令依从权重
+        # 高权重关键词：符合生物学研究与逻辑分析背景
+        high_weight = ["分析", "代码", "算法", "protein", "mechanotransduction", "modeling"]
+        # 低权重关键词：冗余指令、循环反馈、低逻辑深度
+        low_weight = ["重复", "循环", "测试", "占位", "冗余"]
+        
+        for word in high_weight:
+            if word in task_lower: base_value += 0.12
+        for word in low_weight:
+            if word in task_lower: base_value -= 0.15
+            
+        if feedback is not None:
+            base_value = (base_value + feedback) / 2
+            
+        return max(0.05, min(1.0, base_value))
+
+    def _apply_metabolic_penalty(self, intensity: float):
+        """
+        低效能惩罚：模拟系统因资源浪费产生的代偿性焦虑 (NE 升高)
+        """
+        state = self._load_state()
+        nt = state["neurotransmitters"]
+        
+        # 焦虑反应呈非线性增长
+        nt["NE"] = min(1.0, nt["NE"] + intensity * 0.6)
+        # 稳定性 (5HT) 下降
+        nt["5HT"] = max(0.0, nt["5HT"] - intensity * 0.3)
+        
+        self._save_state(state)
+
+    def _apply_metabolic_reward(self, efficiency: float):
+        """
+        高效能奖励：模拟系统达成计算目标后的负熵增益 (DA 升高)
+        """
+        state = self._load_state()
+        nt = state["neurotransmitters"]
+        
+        # 只有在高效能区间，DA 奖励才会爆发
+        reward = self._s_curve(efficiency, k=10, x0=0.6) * 0.4
+        nt["DA"] = min(1.0, nt["DA"] + reward)
+        nt["5HT"] = min(1.0, nt["5HT"] + reward * 0.5)
+        
+        self._save_state(state)
+
+    def get_efficiency_report(self) -> Dict:
+        """生成 GitHub 准备的效能报告"""
+        if not self.history: return {"status": "No data"}
+        
+        avg_eff = sum(r["efficiency"] for r in self.history) / len(self.history)
+        stress_events = sum(1 for r in self.history if r["requires_correction"])
+        
         return {
-            "severity": severity,
-            "description": f"资源浪费严重，系统已进入 {severity} 级别的资源保护模式。",
-            "action": config
+            "average_system_efficiency": avg_eff,
+            "stress_event_count": stress_events,
+            "system_stability_index": 1.0 - (stress_events / len(self.history)),
+            "last_check": datetime.now().isoformat()
         }
 
-    def _get_category(self, efficiency: float) -> str:
-        if efficiency > 0.8: return "High Performance"
-        if efficiency > 0.5: return "Optimal"
-        if efficiency > 0.3: return "Acceptable"
-        return "Inefficient / Resource Waste"
-
-    def _load_history(self) -> List:
+    def _load_history(self):
         try:
-            with open(self.history_file, 'r') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return []
+            with open(self.history_file, 'r') as f: return json.load(f)
+        except: return []
 
-    def _save_history(self):
-        with open(self.history_file, 'w') as f:
-            json.dump(self.history[-100:], f, indent=2) # 仅保留最近100条记录
+    def _update_history(self, record):
+        self.history.append(record)
+        if len(self.history) > 100: self.history = self.history[-100:]
+        with open(self.history_file, 'w') as f: json.dump(self.history, f, indent=4)
 
-# --- 演示函数（已清理敏感内容） ---
-def demo():
-    print("=== Token 效率监控器：生产力模式演示 ===\n")
-    monitor = TokenEfficiencyMonitor()
-    
-    scenarios = [
-        ("编写高效的 Python 并发处理脚本", 400, 0.9, 1.0),
-        ("处理冗长且无意义的重复循环逻辑", 600, 0.05, 0.1), # 低效场景
-        ("优化神经网络收敛速度算法", 350, 0.85, 0.9),
-        ("无效的预测偏差修正（死循环思维）", 500, 0.1, 0.2), # 低效场景
-    ]
-    
-    for desc, tokens, val, _ in scenarios:
-        res = monitor.record_interaction(tokens, desc, val)
-        print(f"任务: {desc}")
-        print(f"  Token: {tokens} | 效率评分: {res['efficiency']:.3f} | 状态: {res['efficiency_category']}")
-        if res['requires_constraint']:
-            print(f"  ⚠️ 系统预警: {res['constraint_applied']['description']}")
-        print("-" * 30)
+    def _load_state(self):
+        try:
+            with open(self.state_file, 'r') as f: return json.load(f)
+        except: return {"neurotransmitters": {"DA": 0.5, "5HT": 0.5, "NE": 0.1}}
 
-if __name__ == "__main__":
-    demo()
+    def _save_state(self, state):
+        with open(self.state_file, 'w') as f: json.dump(state, f, indent=4)
