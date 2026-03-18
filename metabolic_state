@@ -1,67 +1,117 @@
+"""
+metabolic_state.py - 基于预测编码与变分自由能的代谢模拟系统
+核心功能：模拟生物稳态、神经递质平衡及认知负荷，为自主智能体提供动力源。
+"""
+
 import json
 import time
 import math
-from typing import Dict
+from typing import Dict, List, Tuple, Optional
 
-class MetabolicEngine:
-    """代谢引擎：模拟 ATP/Glucose 消耗与神经递质反馈"""
+class MetabolicState:
+    """代谢状态模拟器：模拟数字生命的生理与心理稳态"""
     
-    def __init__(self, state_file="vitals.json"):
-        self.state_file = state_file
-        self.decay_rate = 0.05  # 基础代谢率
-        
-    def _s_curve(self, x: float, k: float = 12.0, x0: float = 0.5) -> float:
+    # 理想生理指标 (基准值)
+    IDEAL_VITALS = {
+        "G": 100.0,  # 血糖/基础代谢能力 (Glucose)
+        "A": 100.0,  # ATP/能量储备 (Adenosine Triphosphate)
+        "C": 10.0    # 皮质醇/系统压力感知 (Cortisol)
+    }
+    
+    # 神经递质基线水平
+    BASELINE_NTS = {
+        "DA": 0.5,   # 多巴胺 (奖励/动机)
+        "5HT": 0.5,  # 血清素 (情绪稳态/抑制)
+        "NE": 0.1,   # 去甲肾上腺素 (警觉/压力响应)
+        "ACh": 0.5,  # 乙酰胆碱 (注意力/学习效率)
+        "AD": 0.0    # 腺苷 (疲劳度积累)
+    }
+
+    def __init__(self, config_path: str = "vitals_config.json"):
+        self.config_path = config_path
+        self.vitals = self.IDEAL_VITALS.copy()
+        self.nts = self.BASELINE_NTS.copy()
+        self.free_energy = 0.0
+        self.last_update = time.time()
+        self.entropy_history = []
+
+    def _apply_decay(self, dt: float):
+        """核心动力学：模拟神经递质的自然代谢衰减 (ODE简化版)"""
+        decay_rates = {"DA": 0.05, "5HT": 0.02, "NE": 0.08, "ACh": 0.1, "AD": 0.03}
+        for nt, rate in decay_rates.items():
+            # 趋向基线回归
+            target = self.BASELINE_NTS[nt]
+            self.nts[nt] += (target - self.nts[nt]) * (1 - math.exp(-rate * dt))
+
+    def calculate_free_energy(self) -> float:
         """
-        非线性映射函数 (Sigmoid)
-        用于模拟生物学阈值：f(x) = 1 / (1 + exp(-k * (x - x0)))
+        学术核心：计算变分自由能 (Variational Free Energy)
+        衡量系统当前状态与理想稳态之间的预测误差。
         """
-        # 限制输入范围并防止溢出
-        x = max(0.0, min(1.0, x))
-        return 1.0 / (1.0 + math.exp(-k * (x - x0)))
+        # 生理偏离度
+        vital_error = sum([
+            math.pow((self.vitals[k] - self.IDEAL_VITALS[k]) / self.IDEAL_VITALS[k], 2) 
+            for k in self.vitals
+        ])
+        
+        # 递质失衡度 (影响认知熵)
+        nt_imbalance = sum([
+            abs(self.nts[k] - self.BASELINE_NTS[k]) for k in ["DA", "5HT", "NE"]
+        ])
+        
+        self.free_energy = (vital_error * 0.6) + (nt_imbalance * 0.4)
+        return self.free_energy
 
-    def tick(self):
-        """生理时钟滴答：更新生命体征与神经递质"""
-        state = self._load_state()
-        vitals = state["vitals"]
-        nt = state["neurotransmitters"]
+    def stimulate(self, stimulus_type: str, intensity: float) -> Dict:
+        """
+        外部刺激接口：将交互转化为代谢波动
+        """
+        now = time.time()
+        dt = now - self.last_update
+        self._apply_decay(dt)
+        
+        if stimulus_type == "reward":
+            # 正向强化：提升DA，消耗能量
+            self.nts["DA"] = min(1.0, self.nts["DA"] + intensity * 0.5)
+            self.nts["5HT"] = min(1.0, self.nts["5HT"] + intensity * 0.2)
+            self.vitals["A"] -= intensity * 5.0
+        elif stimulus_type == "stress":
+            # 压力刺激：提升NE和皮质醇
+            self.nts["NE"] = min(1.0, self.nts["NE"] + intensity * 0.7)
+            self.vitals["C"] = min(100.0, self.vitals["C"] + intensity * 20.0)
+        elif stimulus_type == "cognitive":
+            # 认知负荷：提升ACh，积累腺苷
+            self.nts["ACh"] = min(1.0, self.nts["ACh"] + intensity * 0.4)
+            self.nts["AD"] += intensity * 0.3
+            self.vitals["G"] -= intensity * 8.0
 
-        # 1. 模拟资源消耗 (ATP/Glucose)
-        vitals["A"] = max(0.0, vitals["A"] - self.decay_rate)
-        
-        # 2. 计算生存压力 (Survival Stress)
-        # 当 ATP 降至 40% (x0=0.6) 以下时，NE (去甲肾上腺素) 呈非线性爆发
-        atp_depletion = 1.0 - (vitals["A"] / 100.0)
-        stress_impact = self._s_curve(atp_depletion, k=15, x0=0.6)
-        
-        # 更新去甲肾上腺素
-        nt["NE"] = min(1.0, nt["NE"] + stress_impact * 0.1)
-        
-        # 3. 稳态抑制：高 NE 会非线性抑制 DA (多巴胺)，模拟长期压力下的动力丧失
-        da_inhibition = self._s_curve(nt["NE"], k=8, x0=0.7)
-        nt["DA"] = max(0.0, nt["DA"] - da_inhibition * 0.05)
-        
-        # 4. 基础代谢回收 (自然代谢掉过剩的递质)
-        for key in nt:
-            nt[key] *= 0.98
+        self.last_update = now
+        fe = self.calculate_free_energy()
+        return self.get_status_report()
 
-        self._save_state(state)
+    def get_status_report(self) -> Dict:
+        """生成系统状态报告，供海马体和监控器调用"""
         return {
-            "vitals": vitals,
-            "stress_signal": stress_impact,
-            "neurotransmitters": nt
+            "vitals": self.vitals,
+            "neurotransmitters": self.nts,
+            "free_energy": self.free_energy,
+            "cognitive_state": "High_Performance" if self.nts["ACh"] > 0.7 else "Standard",
+            "mood_valence": self.nts["DA"] - self.nts["NE"], # 情绪效价简易计算
+            "timestamp": self.last_update
         }
 
-    def _load_state(self) -> Dict:
-        try:
-            with open(self.state_file, 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {
-                "vitals": {"A": 100.0, "G": 100.0, "C": 10.0},
-                "neurotransmitters": {"DA": 0.5, "5HT": 0.5, "NE": 0.1, "EP": 0.0}
-            }
+    def save_state(self, path: str = "vitals_state.json"):
+        """持久化状态，不包含隐私对话"""
+        with open(path, 'w') as f:
+            json.dump(self.get_status_report(), f, indent=2)
 
-    def _save_state(self, state: Dict):
-        state["last_tick"] = time.time()
-        with open(self.state_file, 'w') as f:
-            json.dump(state, f, indent=4)
+if __name__ == "__main__":
+    # 模拟运行测试
+    ms = MetabolicState()
+    print("--- 初始状态 ---")
+    print(ms.get_status_report())
+    
+    print("\n--- 模拟复杂任务输入 ---")
+    report = ms.stimulate("cognitive", 0.8)
+    print(f"自由能: {report['free_energy']:.4f}")
+    print(f"注意力递质 (ACh): {report['neurotransmitters']['ACh']:.4f}")
