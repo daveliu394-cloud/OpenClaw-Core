@@ -1,0 +1,271 @@
+"""
+hippocampus.py - 记忆与代谢状态集成系统
+模拟海马体功能：短期记忆存储、记忆检索、与代谢状态联动
+"""
+
+import json
+import time
+from datetime import datetime
+from typing import Dict, List, Optional, Any
+import hashlib
+
+class Hippocampus:
+    """海马体模拟：处理记忆存储、检索和代谢状态关联"""
+    
+    def __init__(self, storage_path: str = "memory/hippocampus_cache.json"):
+        self.storage_path = storage_path
+        self.memories: Dict[str, Dict] = {}
+        self.load_memories()
+        
+        # 与代谢状态联动
+        self.metabolic_state = None  # 可注入MetabolicState实例
+        
+    def load_memories(self):
+        """从文件加载记忆"""
+        try:
+            with open(self.storage_path, 'r', encoding='utf-8') as f:
+                self.memories = json.load(f)
+        except FileNotFoundError:
+            self.memories = {}
+    
+    def save_memories(self):
+        """保存记忆到文件"""
+        import os
+        os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
+        with open(self.storage_path, 'w', encoding='utf-8') as f:
+            json.dump(self.memories, f, ensure_ascii=False, indent=2)
+    
+    def encode_key(self, content: str, timestamp: Optional[float] = None) -> str:
+        """生成记忆键"""
+        if timestamp is None:
+            timestamp = time.time()
+        raw = f"{content}_{timestamp}"
+        return hashlib.md5(raw.encode()).hexdigest()[:12]
+    
+    def store(self, 
+              content: str, 
+              category: str = "general",
+              emotional_valence: float = 0.0,  # -1.0到1.0，负面到正面
+              arousal: float = 0.5,           # 唤醒度，0.0到1.0
+              associated_tokens: int = 0,
+              metadata: Optional[Dict] = None) -> str:
+        """存储一段记忆"""
+        timestamp = time.time()
+        key = self.encode_key(content, timestamp)
+        
+        memory = {
+            "content": content,
+            "timestamp": timestamp,
+            "datetime": datetime.fromtimestamp(timestamp).isoformat(),
+            "category": category,
+            "emotional_valence": emotional_valence,
+            "arousal": arousal,
+            "associated_tokens": associated_tokens,
+            "access_count": 0,
+            "last_accessed": timestamp,
+            "metadata": metadata or {}
+        }
+        
+        # 如果关联了代谢状态，根据情绪效价和唤醒度更新神经递质
+        if self.metabolic_state:
+            # 情绪效价影响多巴胺（正效价）或去甲肾上腺素（负效价）
+            if emotional_valence > 0:
+                self.metabolic_state.dopamine += emotional_valence * 0.1
+            else:
+                self.metabolic_state.norepinephrine += abs(emotional_valence) * 0.1
+            
+            # 唤醒度影响乙酰胆碱
+            self.metabolic_state.acetylcholine += arousal * 0.05
+        
+        self.memories[key] = memory
+        self.save_memories()
+        return key
+    
+    def retrieve(self, 
+                 query: str = "", 
+                 category: Optional[str] = None,
+                 min_arousal: float = 0.0,
+                 limit: int = 5) -> List[Dict]:
+        """检索记忆：基于内容相似性、类别和唤醒度"""
+        import difflib
+        
+        results = []
+        for key, memory in self.memories.items():
+            # 过滤条件
+            if category and memory["category"] != category:
+                continue
+            if memory["arousal"] < min_arousal:
+                continue
+            
+            # 计算内容相似度
+            if query:
+                similarity = difflib.SequenceMatcher(
+                    None, query.lower(), memory["content"].lower()
+                ).ratio()
+            else:
+                similarity = 0.5  # 无查询时默认相似度
+            
+            # 更新访问统计
+            memory["access_count"] += 1
+            memory["last_accessed"] = time.time()
+            
+            results.append({
+                **memory,
+                "key": key,
+                "similarity": similarity
+            })
+        
+        # 按相似度和唤醒度排序
+        results.sort(key=lambda x: (
+            x["similarity"] * 0.7 + 
+            x["arousal"] * 0.3 +
+            min(x["access_count"] * 0.01, 0.1)  # 频繁访问的记忆稍微优先
+        ), reverse=True)
+        
+        # 如果关联了代谢状态，检索行为本身消耗能量但增强神经可塑性
+        if self.metabolic_state and results:
+            self.metabolic_state.atp -= 0.01 * len(results)
+            self.metabolic_state.neural_plasticity += 0.005 * len(results)
+        
+        self.save_memories()
+        return results[:limit]
+    
+    def retrieve_by_emotion(self,
+                           target_valence: float = 0.0,
+                           target_arousal: float = 0.5,
+                           tolerance: float = 0.3,
+                           limit: int = 5) -> List[Dict]:
+        """根据情绪状态检索记忆"""
+        results = []
+        for key, memory in self.memories.items():
+            valence_diff = abs(memory["emotional_valence"] - target_valence)
+            arousal_diff = abs(memory["arousal"] - target_arousal)
+            
+            if valence_diff <= tolerance and arousal_diff <= tolerance:
+                memory["key"] = key
+                memory["valence_diff"] = valence_diff
+                memory["arousal_diff"] = arousal_diff
+                results.append(memory)
+        
+        # 按情绪匹配度排序
+        results.sort(key=lambda x: x["valence_diff"] + x["arousal_diff"])
+        return results[:limit]
+    
+    def consolidate(self, hours_threshold: int = 24):
+        """记忆巩固：将符合条件的记忆转移到长期存储（模拟）"""
+        now = time.time()
+        consolidated = []
+        
+        for key, memory in list(self.memories.items()):
+            age_hours = (now - memory["timestamp"]) / 3600
+            
+            # 高唤醒度或高情绪强度的记忆更容易巩固
+            consolidation_chance = (
+                memory["arousal"] * 0.6 + 
+                abs(memory["emotional_valence"]) * 0.4
+            )
+            
+            if age_hours >= hours_threshold and consolidation_chance > 0.5:
+                # 这里可以添加将记忆转移到长期存储的逻辑
+                # 目前只是标记并可能从短期存储中移除
+                consolidated.append(memory)
+                # 可选择删除：del self.memories[key]
+        
+        if consolidated and self.metabolic_state:
+            # 记忆巩固消耗能量但增强长期记忆
+            self.metabolic_state.atp -= 0.02 * len(consolidated)
+            self.metabolic_state.long_term_potentiation += 0.01 * len(consolidated)
+        
+        self.save_memories()
+        return consolidated
+    
+    def inject_metabolic_state(self, metabolic_state):
+        """注入代谢状态实例以实现双向联动"""
+        self.metabolic_state = metabolic_state
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """获取记忆系统统计信息"""
+        total = len(self.memories)
+        if total == 0:
+            return {"total_memories": 0}
+        
+        categories = {}
+        total_arousal = 0.0
+        total_valence = 0.0
+        total_access = 0
+        
+        for memory in self.memories.values():
+            cat = memory["category"]
+            categories[cat] = categories.get(cat, 0) + 1
+            total_arousal += memory["arousal"]
+            total_valence += memory["emotional_valence"]
+            total_access += memory["access_count"]
+        
+        avg_arousal = total_arousal / total
+        avg_valence = total_valence / total
+        avg_access = total_access / total
+        
+        return {
+            "total_memories": total,
+            "categories": categories,
+            "avg_arousal": avg_arousal,
+            "avg_valence": avg_valence,
+            "avg_access_count": avg_access,
+            "oldest_memory": min(m["timestamp"] for m in self.memories.values()) if total > 0 else None,
+            "newest_memory": max(m["timestamp"] for m in self.memories.values()) if total > 0 else None
+        }
+
+
+# 与现有MetabolicState集成的示例
+if __name__ == "__main__":
+    # 示例用法
+    hippocampus = Hippocampus()
+    
+    # 存储一些记忆
+    hippocampus.store(
+        content="用户偏好高效的工作环境和明确的反馈",
+        category="preference",
+        emotional_valence=0.3,  # 正面偏好
+        arousal=0.6,
+        associated_tokens=500
+    )
+    
+    hippocampus.store(
+        content="今天在会议室完成了重要的客户演示",
+        category="experience",
+        emotional_valence=0.4,  # 正面情绪，略带紧张
+        arousal=0.7,
+        associated_tokens=1200,
+        metadata={"location": "conference_room", "participants": 5}
+    )
+    
+    hippocampus.store(
+        content="腾讯财报分析完成，建议关注游戏业务复苏",
+        category="work",
+        emotional_valence=0.2,
+        arousal=0.3,
+        associated_tokens=800
+    )
+    
+    # 检索记忆
+    print("检索'会议'相关记忆:")
+    results = hippocampus.retrieve(query="会议", min_arousal=0.5)
+    for r in results:
+        print(f"  - {r['content'][:50]}... (唤醒度: {r['arousal']:.2f})")
+    
+    print("\n情绪状态检索（中等唤醒度、正效价）:")
+    emotional_results = hippocampus.retrieve_by_emotion(
+        target_valence=0.3,
+        target_arousal=0.6,
+        tolerance=0.4
+    )
+    for r in emotional_results:
+        print(f"  - {r['content'][:50]}...")
+    
+    print("\n系统统计:")
+    stats = hippocampus.get_stats()
+    for k, v in stats.items():
+        if k != "categories":
+            print(f"  {k}: {v}")
+    
+    print("  类别分布:", stats.get("categories", {}))
